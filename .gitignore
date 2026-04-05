@@ -1,0 +1,17 @@
+# .NET / Visual Studio
+[Bb]in/
+[Oo]bj/
+.vs/
+.vscode/
+
+# macOS specific
+.DS_Store
+
+# User-specific files
+*.user
+*.userosscache
+*.sln.docstates
+
+# Hidden build artifacts
+*.suo
+*.user
