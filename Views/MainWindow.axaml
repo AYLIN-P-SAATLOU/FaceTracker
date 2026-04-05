@@ -1,13 +1,15 @@
-<?xml version="1.0" encoding="utf-8"?>
+
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="FaceRecognizerApp.Views.MainWindow"
-        Title="Face Tracker"
+        Title="Face Detector"
         Width="800" Height="600">
+    
     <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="10">
         <Border Background="Black" CornerRadius="10" ClipToBounds="True">
             <Image Name="CameraDisplay" Width="640" Height="480" Stretch="Uniform"/>
         </Border>
+        
         <Button Name="StartButton" Content="Start Camera" HorizontalAlignment="Center" Padding="20,10"/>
     </StackPanel>
 </Window>

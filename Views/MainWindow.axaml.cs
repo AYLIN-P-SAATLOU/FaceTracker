@@ -11,19 +11,21 @@ namespace FaceRecognizerApp.Views;
 
 public partial class MainWindow : Avalonia.Controls.Window
 {
+    // --- Fields ---
     private VideoCapture? _capture;
     private readonly System.Timers.Timer _timer;
     private bool _isProcessing = false; 
     private Image? _cameraDisplayControl; 
 
+    // The Face Detector Model
+    private CascadeClassifier _faceCascade = new CascadeClassifier("haarcascade_frontalface_default.xml");
+
     public MainWindow()
     {
         AvaloniaXamlLoader.Load(this); 
         
-        // 1. Manually find the Image
         _cameraDisplayControl = this.FindControl<Image>("CameraDisplay");
 
-        // 2. Manually find the Button and connect the Click event
         var startButton = this.FindControl<Button>("StartButton");
         if (startButton != null)
         {
@@ -34,7 +36,6 @@ public partial class MainWindow : Avalonia.Controls.Window
         _timer.Elapsed += (s, e) => GrabFrame();
     }
 
-    // Note: Added '?' to object to match the modern C# standard
     private void OnStartCameraClick(object? sender, RoutedEventArgs e)
     {
         if (_capture != null) return; 
@@ -42,9 +43,10 @@ public partial class MainWindow : Avalonia.Controls.Window
         _capture = new VideoCapture(0); 
         if (!_capture.IsOpened())
         {
-            Console.WriteLine("Could not open camera.");
+            Console.WriteLine("Could not open camera!");
             return;
         }
+        
         _timer.Start();
     }
 
@@ -58,6 +60,23 @@ public partial class MainWindow : Avalonia.Controls.Window
             using var frame = new Mat();
             if (_capture.Read(frame) && !frame.Empty())
             {
+                // --- FACE DETECTION ---
+                using var gray = new Mat();
+                Cv2.CvtColor(frame, gray, ColorConversionCodes.BGR2GRAY);
+
+                var faces = _faceCascade.DetectMultiScale(
+                    gray, 
+                    scaleFactor: 1.1, 
+                    minNeighbors: 5, 
+                    minSize: new OpenCvSharp.Size(30, 30));
+
+                // Draw the green box
+                foreach (var rect in faces)
+                {
+                    Cv2.Rectangle(frame, rect, Scalar.Green, 2);
+                }
+
+                // --- UPDATE UI ---
                 var bitmap = ConvertMatToBitmap(frame);
                 Dispatcher.UIThread.InvokeAsync(() =>
                 {
@@ -65,6 +84,10 @@ public partial class MainWindow : Avalonia.Controls.Window
                         _cameraDisplayControl.Source = bitmap;
                 });
             }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error processing frame: {ex.Message}");
         }
         finally
         {
@@ -105,6 +128,7 @@ public partial class MainWindow : Avalonia.Controls.Window
         _timer.Stop();
         _timer.Dispose();
         _capture?.Dispose();
+        _faceCascade?.Dispose();
         base.OnClosed(e);
     }
 }
