@@ -6,6 +6,7 @@ using Avalonia.Markup.Xaml;
 using OpenCvSharp;
 using System;
 using Avalonia.Threading;
+using System.Collections.Generic;
 
 namespace FaceRecognizerApp.Views;
 
@@ -20,14 +21,13 @@ public partial class MainWindow : Avalonia.Controls.Window
     private TextBlock? _faceCountLabel;
     private bool _applyBlur = false; 
 
-    // The two brains for our app: Face and Eyes
-    private CascadeClassifier _faceCascade = new CascadeClassifier("haarcascade_frontalface_alt2.xml");
-    private CascadeClassifier _eyeCascade = new CascadeClassifier("haarcascade_eye.xml");
+    // The two main models for front and side face detection
+    private CascadeClassifier _frontalFace = new CascadeClassifier("haarcascade_frontalface_alt2.xml");
+    private CascadeClassifier _profileFace = new CascadeClassifier("haarcascade_profileface.xml");
 
     public MainWindow()
     {
         AvaloniaXamlLoader.Load(this); 
-        
         _cameraDisplayControl = this.FindControl<Image>("CameraDisplay");
         _faceCountLabel = this.FindControl<TextBlock>("FaceCountLabel");
 
@@ -36,18 +36,11 @@ public partial class MainWindow : Avalonia.Controls.Window
 
         var blurCheckBox = this.FindControl<CheckBox>("BlurCheckBox");
         if (blurCheckBox != null)
-        {
             blurCheckBox.IsCheckedChanged += (s, e) => _applyBlur = blurCheckBox.IsChecked ?? false;
-        }
 
-        // Force window to the front on launch
-        this.Opened += (s, e) => 
-        {
-            this.Activate(); 
-            this.Topmost = true; 
-        };
+        this.Opened += (s, e) => { this.Activate(); this.Topmost = true; };
 
-        _timer = new System.Timers.Timer(33); // Targeting ~30 FPS
+        _timer = new System.Timers.Timer(33); 
         _timer.Elapsed += (s, e) => GrabFrame();
     }
 
@@ -56,7 +49,14 @@ public partial class MainWindow : Avalonia.Controls.Window
         lock (_cameraLock)
         {
             if (_capture != null) return; 
+            
             _capture = new VideoCapture(0); 
+            
+            // SPEED FIX: Force the camera to 640x480 resolution. 
+            // This stops 1080p/4K lag and makes the AI run instantly.
+            _capture.Set(VideoCaptureProperties.FrameWidth, 640);
+            _capture.Set(VideoCaptureProperties.FrameHeight, 480);
+            
             if (!_capture.IsOpened()) return;
         }
         _timer.Start();
@@ -64,7 +64,6 @@ public partial class MainWindow : Avalonia.Controls.Window
 
     private void OnStopCameraClick(object? sender, RoutedEventArgs e)
     {
-        // Stop requesting new frames, freezing the UI on the last frame
         _timer.Stop();
         
         lock (_cameraLock)
@@ -93,52 +92,64 @@ public partial class MainWindow : Avalonia.Controls.Window
 
             using var gray = new Mat();
             Cv2.CvtColor(frame, gray, ColorConversionCodes.BGR2GRAY);
+            Cv2.EqualizeHist(gray, gray); 
 
-            // Core Face Detection
-            var faces = _faceCascade.DetectMultiScale(
-                gray, 1.05, 3, HaarDetectionTypes.ScaleImage, new OpenCvSharp.Size(40, 40));
+            // SPEED FIX: ScaleFactor set to 1.2 for faster scanning
+            OpenCvSharp.Rect[] frontal = _frontalFace.DetectMultiScale(gray, 1.2, 5, HaarDetectionTypes.ScaleImage, new OpenCvSharp.Size(60, 60));
+            OpenCvSharp.Rect[] profile = _profileFace.DetectMultiScale(gray, 1.2, 5, HaarDetectionTypes.ScaleImage, new OpenCvSharp.Size(60, 60));
 
-            foreach (var faceRect in faces)
+            var allFaces = new List<OpenCvSharp.Rect>(frontal);
+
+            // Deduplication logic
+            foreach (var pRect in profile)
+            {
+                bool isDuplicate = false;
+                foreach (var fRect in frontal)
+                {
+                    OpenCvSharp.Rect intersect = pRect & fRect; 
+                    if (intersect.Width > 0 && intersect.Height > 0)
+                    {
+                        isDuplicate = true;
+                        break; 
+                    }
+                }
+                if (!isDuplicate) allFaces.Add(pRect);
+            }
+
+            // Draw bounding boxes or apply blur
+            foreach (var faceRect in allFaces)
             {
                 if (_applyBlur)
                 {
-                    // Privacy Mask (Skip drawing eyes if the face is blurred)
                     using var faceRoi = new Mat(frame, faceRect);
-                    int blurStrength = (faceRect.Width / 4) * 2 + 1; 
-                    Cv2.GaussianBlur(faceRoi, faceRoi, new OpenCvSharp.Size(blurStrength, blurStrength), 0);
+                    
+                    // Dynamic blur size based on face width
+                    int blurSize = faceRect.Width / 2;
+                    if (blurSize % 2 == 0) blurSize++; 
+
+                    // Extreme blur applied
+                    Cv2.GaussianBlur(faceRoi, faceRoi, new OpenCvSharp.Size(blurSize, blurSize), 15);
+                    
                     Cv2.Rectangle(frame, faceRect, Scalar.Gray, 2);
                 }
                 else
                 {
-                    // Standard Tracking Box for Face
                     Cv2.Rectangle(frame, faceRect, Scalar.Green, 2);
-
-                    // Region of Interest (ROI) mapping to just the face area
-                    using var faceRoiGray = new Mat(gray, faceRect);
-                    using var faceRoiColor = new Mat(frame, faceRect); // Draws directly onto the main frame
-
-                    // Eye Detection inside the face
-                    var eyes = _eyeCascade.DetectMultiScale(
-                        faceRoiGray, 1.1, 5, HaarDetectionTypes.ScaleImage, new OpenCvSharp.Size(15, 15));
-                        
-                    foreach (var eye in eyes)
-                    {
-                        Cv2.Rectangle(faceRoiColor, eye, Scalar.Blue, 1);
-                    }
                 }
             }
 
-            // Update UI
             var bitmap = ConvertMatToBitmap(frame);
+            var count = allFaces.Count;
+
             Dispatcher.UIThread.InvokeAsync(() =>
             {
                 if (_cameraDisplayControl != null) _cameraDisplayControl.Source = bitmap;
-                if (_faceCountLabel != null) _faceCountLabel.Text = $"Faces Detected: {faces.Length}";
+                if (_faceCountLabel != null) _faceCountLabel.Text = $"Faces Detected: {count}";
             });
         }
         catch (Exception ex) 
         { 
-            Console.WriteLine($"Error processing frame: {ex.Message}"); 
+            Console.WriteLine(ex.Message); 
         }
         finally 
         { 
@@ -168,9 +179,8 @@ public partial class MainWindow : Avalonia.Controls.Window
             _capture?.Dispose(); 
         }
         
-        // Clean up both models
-        _faceCascade?.Dispose();
-        _eyeCascade?.Dispose();
+        _frontalFace.Dispose();
+        _profileFace.Dispose();
         
         base.OnClosed(e);
     }
