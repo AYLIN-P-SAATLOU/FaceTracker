@@ -127,7 +127,7 @@ public partial class MainWindow : Avalonia.Controls.Window
                     int blurSize = faceRect.Width / 2;
                     if (blurSize % 2 == 0) blurSize++; 
 
-                    // Extreme blur applied
+                    
                     Cv2.GaussianBlur(faceRoi, faceRoi, new OpenCvSharp.Size(blurSize, blurSize), 15);
                     
                     Cv2.Rectangle(frame, faceRect, Scalar.Gray, 2);
